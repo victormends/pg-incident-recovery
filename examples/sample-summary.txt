@@ -1,0 +1,14 @@
+============================================================
+Recovered automatically : 3
+  + postgresql-x64-17 (erp_production)
+  + postgresql-reporting (erp_reporting)
+  + postgresql-staging (erp_staging)
+Still failing          : 1
+  - postgresql-legacy (legacy_archive)
+WAL missing / fatal    : 1
+  ! postgresql-old (legacy_2017) - restore from backup required
+Skipped                : 1
+  ~ postgresql-unmapped
+Queue file             : C:\pg-incident-recovery\state\failed-clusters.txt
+Cluster map            : C:\pg-incident-recovery\state\cluster-map.txt
+============================================================

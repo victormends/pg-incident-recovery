@@ -1,0 +1,34 @@
+{
+  "service_name_patterns": [
+    "postgresql*"
+  ],
+  "state_dir": "C:\\pg-incident-recovery\\state",
+  "cluster_map_probe_user": "postgres",
+  "pg_bin_candidates": [
+    "C:\\Program Files\\PostgreSQL\\17\\bin",
+    "C:\\Program Files\\PostgreSQL\\16\\bin",
+    "C:\\PostgreSQL\\15\\bin"
+  ],
+  "disk": {
+    "critical_free_gb": 5,
+    "warning_free_gb": 10
+  },
+  "recovery": {
+    "max_retries": 5,
+    "retry_delay_seconds": 10,
+    "recovery_timeout_seconds": 600,
+    "recovery_poll_seconds": 10,
+    "max_parallel_starts": 4
+  },
+  "log_patterns": {
+    "recovery_in_progress": [
+      "automatic recovery in progress",
+      "redo starts at",
+      "syncing data directory \\(fsync\\)"
+    ],
+    "ready": [
+      "database system is ready to accept connections",
+      "checkpoint complete"
+    ]
+  }
+}

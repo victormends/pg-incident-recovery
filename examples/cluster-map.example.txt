@@ -1,0 +1,2 @@
+postgresql-x64-17=erp_production
+postgresql-reporting=erp_reporting

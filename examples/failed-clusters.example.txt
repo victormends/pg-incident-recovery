@@ -1,0 +1,2 @@
+postgresql-x64-17=C:\PostgreSQL\17\data
+postgresql-reporting=C:\PostgreSQL\17\reporting
