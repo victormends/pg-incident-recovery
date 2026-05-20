@@ -161,7 +161,7 @@ function Test-AndClearStalePid {
     $storedPid = $pidContent -as [int]
 
     if (-not $storedPid) {
-        Write-Warn "$ServiceName: postmaster.pid is empty or unreadable. Removing stale file."
+        Write-Warn "${ServiceName}: postmaster.pid is empty or unreadable. Removing stale file."
         if (-not $DryRunMode) {
             Remove-Item $pidFile -Force
         }
@@ -170,7 +170,7 @@ function Test-AndClearStalePid {
 
     $processRunning = Get-Process -Id $storedPid -ErrorAction SilentlyContinue
     if ($processRunning) {
-        Write-Warn "$ServiceName: PID $storedPid is still running. Attempting to stop the stale postgres process."
+        Write-Warn "${ServiceName}: PID $storedPid is still running. Attempting to stop the stale postgres process."
         if ($DryRunMode) {
             return $true
         }
@@ -180,7 +180,7 @@ function Test-AndClearStalePid {
             Start-Sleep -Seconds 2
         }
         catch {
-            Write-Bad "$ServiceName: failed to stop process $storedPid. Manual intervention required."
+            Write-Bad "${ServiceName}: failed to stop process $storedPid. Manual intervention required."
             return $false
         }
     }
@@ -189,7 +189,7 @@ function Test-AndClearStalePid {
         Remove-Item $pidFile -Force
     }
 
-    Write-Info "$ServiceName: stale postmaster.pid cleared."
+    Write-Info "${ServiceName}: stale postmaster.pid cleared."
     return $true
 }
 
@@ -367,7 +367,7 @@ function Update-ClusterMapEntry {
         Write-KeyValueFile -Path $ClusterMapFile -Map $existing
     }
     catch {
-        Write-Warn "Failed to update cluster map for $ServiceName: $($_.Exception.Message)"
+        Write-Warn "Failed to update cluster map for ${ServiceName}: $($_.Exception.Message)"
     }
 }
 
@@ -391,25 +391,25 @@ function Invoke-StartPass {
         Write-Host "`n[$name] Preparing..." -ForegroundColor Cyan
 
         if (-not $DataDirMap.ContainsKey($name)) {
-            Write-Bad "$name: data directory could not be resolved."
+            Write-Bad "${name}: data directory could not be resolved."
             $skipped.Add($name)
             continue
         }
 
         $dataDir = $DataDirMap[$name]
-        Write-Info "$name: using resolved data directory $dataDir"
+        Write-Info "${name}: using resolved data directory $dataDir"
         $diskState = Test-DiskGuard -DataDirectory $dataDir -CriticalFreeGb $Config.disk.critical_free_gb -WarningFreeGb $Config.disk.warning_free_gb
         if ($diskState.State -eq 'critical') {
-            Write-Bad "$name: drive has only $($diskState.FreeGb) GB free. Aborting run to avoid corruption risk."
+            Write-Bad "${name}: drive has only $($diskState.FreeGb) GB free. Aborting run to avoid corruption risk."
             throw "Critical free-space threshold reached."
         }
         elseif ($diskState.State -eq 'warning') {
-            Write-Warn "$name: low free space detected ($($diskState.FreeGb) GB)."
+            Write-Warn "${name}: low free space detected ($($diskState.FreeGb) GB)."
         }
 
         $walCheck = Test-WalMissing -DataDirectory $dataDir -PgControlDataPath $PgControlDataPath
         if ($walCheck -and $walCheck.WalMissing) {
-            Write-Bad "$name: required WAL file is missing ($($walCheck.WalFile)). Restore from backup is required."
+            Write-Bad "${name}: required WAL file is missing ($($walCheck.WalFile)). Restore from backup is required."
             $walCorrupted.Add($name)
             continue
         }
@@ -421,7 +421,7 @@ function Invoke-StartPass {
         }
 
         $readyToStart.Add($name)
-        Write-Info "$name: ready to start."
+        Write-Info "${name}: ready to start."
     }
 
     $passResolved = New-Object System.Collections.Generic.List[string]
@@ -468,7 +468,7 @@ function Invoke-StartPass {
         $dataDir = $DataDirMap[$name]
 
         if ($result -eq 'ok') {
-            Write-Ok "$name: started successfully."
+            Write-Ok "${name}: started successfully."
             $passResolved.Add($name)
             if (-not $DryRunMode) {
                 Update-ClusterMapEntry -ServiceName $name -DataDirectory $dataDir -PsqlPath $PsqlPath -ClusterMapFile $ClusterMapFile -ProbeUser $ProbeUser
@@ -480,22 +480,22 @@ function Invoke-StartPass {
         $inCrashRecovery = Test-IsInCrashRecovery -DataDirectory $dataDir -Patterns $Config.log_patterns.recovery_in_progress
 
         if ($proc -and $inCrashRecovery) {
-            Write-Warn "$name: postgres process is alive and logs indicate crash recovery. Queuing for wait path."
+            Write-Warn "${name}: postgres process is alive and logs indicate crash recovery. Queuing for wait path."
             $recoveryQueue[$name] = $dataDir
             continue
         }
 
         $walCheck = Test-WalMissing -DataDirectory $dataDir -PgControlDataPath $PgControlDataPath
         if ($walCheck -and $walCheck.WalMissing) {
-            Write-Bad "$name: required WAL file is missing after failed start ($($walCheck.WalFile))."
+            Write-Bad "${name}: required WAL file is missing after failed start ($($walCheck.WalFile))."
             $walCorrupted.Add($name)
             continue
         }
 
         $errMsg = ($result -replace '^fail:', '').Trim()
-        Write-Bad "$name: failed to start."
+        Write-Bad "${name}: failed to start."
         if ($errMsg) {
-            Write-Info "$name: service error: $errMsg"
+            Write-Info "${name}: service error: $errMsg"
         }
         Write-LogTail -DataDirectory $dataDir
         $passFailed.Add($name)
@@ -598,7 +598,7 @@ function Invoke-StartPass {
 
             if ($result -like 'ok:*') {
                 $secs = $result -replace '^ok:', ''
-                Write-Ok "$name: recovery completed after $secs seconds."
+                Write-Ok "${name}: recovery completed after $secs seconds."
                 $passResolved.Add($name)
                 if (-not $DryRunMode) {
                     Update-ClusterMapEntry -ServiceName $name -DataDirectory $dataDir -PsqlPath $PsqlPath -ClusterMapFile $ClusterMapFile -ProbeUser $ProbeUser
@@ -606,24 +606,24 @@ function Invoke-StartPass {
             }
             elseif ($result -like 'ok-scm-restart:*') {
                 $secs = $result -replace '^ok-scm-restart:', ''
-                Write-Ok "$name: recovery completed and service restarted cleanly under SCM after $secs seconds."
+                Write-Ok "${name}: recovery completed and service restarted cleanly under SCM after $secs seconds."
                 $passResolved.Add($name)
                 if (-not $DryRunMode) {
                     Update-ClusterMapEntry -ServiceName $name -DataDirectory $dataDir -PsqlPath $PsqlPath -ClusterMapFile $ClusterMapFile -ProbeUser $ProbeUser
                 }
             }
             elseif ($result -eq 'died') {
-                Write-Bad "$name: postgres process died during crash recovery."
+                Write-Bad "${name}: postgres process died during crash recovery."
                 Write-LogTail -DataDirectory $dataDir
                 $passFailed.Add($name)
             }
             elseif ($result -eq 'scm-restart-failed') {
-                Write-Bad "$name: recovery completed but clean SCM restart failed."
+                Write-Bad "${name}: recovery completed but clean SCM restart failed."
                 Write-LogTail -DataDirectory $dataDir
                 $passFailed.Add($name)
             }
             else {
-                Write-Bad "$name: recovery timed out after $($Config.recovery.recovery_timeout_seconds) seconds."
+                Write-Bad "${name}: recovery timed out after $($Config.recovery.recovery_timeout_seconds) seconds."
                 Write-LogTail -DataDirectory $dataDir
                 $passFailed.Add($name)
             }
