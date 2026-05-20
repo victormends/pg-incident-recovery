@@ -226,6 +226,21 @@ pg-incident-recovery/
 - Low-disk aborts are intentional: starting a cluster on an exhausted volume can worsen the incident.
 - Localized PostgreSQL logs are real. If your host logs in a different language, update the regex patterns in config.
 
+See [`SECURITY.md`](SECURITY.md) for the public security and operational-safety policy.
+
+---
+
+## Public Release Checklist
+
+Before tagging a public release, verify:
+
+- The README usage examples match the script parameters in `scripts/pg-incident-recovery.ps1`.
+- `examples/cluster-config.example.json` contains only generic paths, service patterns, and thresholds.
+- A private-string scan finds no client names, credentials, internal server paths, or production database names.
+- The documented safety boundaries still match the implementation: no automatic `pg_resetwal`, WAL deletion, replication-slot remediation, or service-definition rewrite.
+- `-DryRun` remains documented before normal execution examples.
+- Release notes describe the release as a Windows-first operator-guided recovery tool, not a guaranteed automatic repair system.
+
 ---
 
 ## License
