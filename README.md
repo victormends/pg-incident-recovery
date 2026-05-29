@@ -51,9 +51,10 @@ It does **not**:
 
 - run `pg_resetwal` automatically
 - delete WAL files automatically
-- drop replication slots automatically
 - rewrite PostgreSQL service definitions
 - claim to recover irrecoverable clusters
+
+Replication slot cleanup is handled by the companion script `pg-wal-slot-monitor.ps1` (see below), which is a separate concern from crash recovery.
 
 If a required WAL file is missing, the tool marks the cluster as fatal and tells the operator to restore from backup. That boundary is intentional.
 
@@ -194,8 +195,35 @@ Not in v0.1:
 - webhook notifications
 - JSON reports
 - automatic `ANALYZE`
-- replication-slot remediation
 - Linux support
+
+---
+
+## Companion: WAL Replication Slot Monitor
+
+[`scripts/pg-wal-slot-monitor.ps1`](scripts/pg-wal-slot-monitor.ps1) is a separate
+Task Scheduler script that addresses a different failure mode: **orphaned replication
+slots accumulating WAL indefinitely** after a subscriber disconnects or is decommissioned.
+
+This is the PG12-compatible equivalent of `max_slot_wal_keep_size` (available only on
+PG13+). It:
+
+- queries `pg_replication_slots` left-joined to `pg_stat_replication`
+- computes bytes retained per inactive slot
+- emits warnings to Windows Event Log and a log file when retention exceeds a threshold
+- drops orphaned slots automatically when both retention and inactivity thresholds pass
+- separately alerts if the `pg_wal` directory itself exceeds a size limit
+- exposes an `$AlertOnly` switch for read-only monitoring without any destructive action
+
+**When to use it:**
+
+| PostgreSQL version | Recommended approach |
+|---|---|
+| PG12 | Schedule `pg-wal-slot-monitor.ps1` every 5 minutes under Task Scheduler |
+| PG13+ | Set `max_slot_wal_keep_size` in `postgresql.conf`; optionally keep the monitor as an alert layer |
+
+See [`examples/wal-replication-config.example.conf`](examples/wal-replication-config.example.conf)
+for the annotated WAL/replication configuration context this monitor was designed to operate against.
 
 ---
 
@@ -208,6 +236,7 @@ pg-incident-recovery/
   .gitignore
   scripts/
     pg-incident-recovery.ps1
+    pg-wal-slot-monitor.ps1
   docs/
     implementation-plan.md
   examples/
@@ -215,6 +244,7 @@ pg-incident-recovery/
     failed-clusters.example.txt
     cluster-map.example.txt
     sample-summary.txt
+    wal-replication-config.example.conf
 ```
 
 ---
