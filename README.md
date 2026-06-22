@@ -211,7 +211,7 @@ PG13+). It:
 - queries `pg_replication_slots` left-joined to `pg_stat_replication`
 - computes bytes retained per inactive slot
 - emits warnings to Windows Event Log and a log file when retention exceeds a threshold
-- drops orphaned slots automatically when both retention and inactivity thresholds pass
+- drops orphaned slots automatically when retention exceeds a threshold
 - separately alerts if the `pg_wal` directory itself exceeds a size limit
 - exposes an `$AlertOnly` switch for read-only monitoring without any destructive action
 

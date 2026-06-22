@@ -7,14 +7,12 @@
     service account with pg_monitor / superuser rights).
 
     For each configured PostgreSQL instance the monitor:
-      - Queries pg_replication_slots left-joined to pg_stat_replication
+      - Queries pg_replication_slots
       - Identifies slots that are inactive (active = false)
-      - Computes bytes_retained, bytes_pending, and time_since_active
+      - Computes bytes_retained
       - Emits a WARNING to the Windows Event Log and log file when any slot exceeds
         the warning threshold
-      - Drops the slot automatically when BOTH conditions pass:
-            bytes_retained >= $AutoDropThresholdBytes
-            AND time_since_active >= $AutoDropInactiveMinutes
+      - Drops the slot automatically when bytes_retained >= $AutoDropThresholdBytes
       - Separately alerts when the actual pg_wal directory size exceeds $WalDirAlertBytes
 
     On PostgreSQL 13+ you can enforce max_slot_wal_keep_size in postgresql.conf as a
@@ -43,9 +41,9 @@ param(
     # Emit a warning when a slot retains more than this many bytes.
     [long]$WarnThresholdBytes = 500MB,
 
-    # Auto-drop a slot when retained bytes AND inactivity both exceed these thresholds.
+    # Auto-drop a slot when retained bytes exceed this threshold.
+    # (Inactive time is no longer evaluated as PostgreSQL does not natively track disconnection timestamps).
     [long]$AutoDropThresholdBytes = 2GB,
-    [int]$AutoDropInactiveMinutes = 30,
 
     # Alert when the pg_wal directory itself exceeds this size.
     [long]$WalDirAlertBytes = 4GB
@@ -74,15 +72,46 @@ $instances = @(
 
 $LogFile = Join-Path $LogDir "wal_slots.log"
 
+# Discover psql.exe path
+$global:psqlExe = "psql.exe"
+$commonPaths = @(
+    "C:\Program Files\PostgreSQL\16\bin\psql.exe",
+    "C:\Program Files\PostgreSQL\15\bin\psql.exe",
+    "C:\Program Files\PostgreSQL\14\bin\psql.exe",
+    "C:\Program Files\PostgreSQL\13\bin\psql.exe",
+    "C:\Program Files\PostgreSQL\12\bin\psql.exe",
+    "C:\Program Files\PostgreSQL\11\bin\psql.exe"
+)
+
+# Check if psql is in PATH
+try {
+    $null = Get-Command "psql.exe" -ErrorAction Stop
+} catch {
+    # Fallback to common paths
+    foreach ($p in $commonPaths) {
+        if (Test-Path $p) {
+            $global:psqlExe = $p
+            break
+        }
+    }
+}
+
 function Ensure-Prerequisites {
     if (-not (Test-Path $LogDir)) {
-        New-Item -ItemType Directory -Path $LogDir | Out-Null
+        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
     }
     if (-not [System.Diagnostics.EventLog]::SourceExists($EventSource)) {
         try {
             New-EventLog -LogName Application -Source $EventSource -ErrorAction Stop
         } catch {
             # May fail without elevation; continue without Event Log if needed.
+        }
+    }
+    
+    if (-not (Get-Command $global:psqlExe -ErrorAction SilentlyContinue)) {
+        if (-not (Test-Path $global:psqlExe)) {
+            Write-Log "FATAL: psql.exe not found in PATH or standard installation directories. Please add PostgreSQL bin directory to PATH." "ERROR"
+            exit 1
         }
     }
 }
@@ -111,44 +140,34 @@ SELECT
     COALESCE(
         pg_wal_lsn_diff(pg_current_wal_lsn(), rs.confirmed_flush_lsn),
         0
-    )::bigint                                           AS bytes_retained,
+    )::bigint AS bytes_retained,
     COALESCE(
         pg_wal_lsn_diff(pg_current_wal_lsn(), rs.restart_lsn),
         0
-    )::bigint                                           AS bytes_pending,
-    EXTRACT(EPOCH FROM (NOW() - sr.state_change)) / 60  AS minutes_since_active
+    )::bigint AS bytes_pending
 FROM pg_replication_slots rs
-LEFT JOIN pg_stat_replication sr
-       ON rs.active_pid = sr.pid
 WHERE rs.active = false
 ORDER BY bytes_retained DESC;
 "@
 
-    $connStr = "Server=localhost;Port=$($Instance.Port);Database=postgres;Integrated Security=true;"
-    try {
-        $rows = Invoke-Sqlcmd -Query $query -ConnectionString $connStr `
-            -ErrorAction Stop 2>$null
-        return $rows
-    } catch {
-        # Invoke-Sqlcmd may not be available; fall back to psql if on PATH.
-        $result = & psql -h localhost -p $Instance.Port -U postgres -c $query `
-            --csv --no-align --tuples-only 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Write-Log "[$($Instance.Name)] Failed to query pg_replication_slots: $_" "ERROR"
-            return @()
-        }
-        # Parse CSV output into objects
-        $lines = $result | Where-Object { $_ -match ',' }
-        return $lines | ForEach-Object {
-            $cols = $_ -split ','
-            [PSCustomObject]@{
-                slot_name           = $cols[0].Trim()
-                slot_type           = $cols[1].Trim()
-                active              = $cols[2].Trim()
-                bytes_retained      = [long]$cols[3].Trim()
-                bytes_pending       = [long]$cols[4].Trim()
-                minutes_since_active = [double]$cols[5].Trim()
-            }
+    # Use 127.0.0.1 instead of localhost to avoid IPv6 (::1) auth rejections common on Windows pg_hba.conf defaults
+    $result = & $global:psqlExe -h 127.0.0.1 -p $Instance.Port -U postgres -c $query --csv --no-align --tuples-only 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        # Format array result into a single string for logging
+        $errMsg = $result -join ' '
+        Write-Log "[$($Instance.Name)] Failed to query pg_replication_slots: $errMsg" "ERROR"
+        return @()
+    }
+
+    $lines = $result | Where-Object { $_ -match ',' }
+    return $lines | ForEach-Object {
+        $cols = $_ -split ','
+        [PSCustomObject]@{
+            slot_name      = $cols[0].Trim()
+            slot_type      = $cols[1].Trim()
+            active         = $cols[2].Trim()
+            bytes_retained = [long]$cols[3].Trim()
+            bytes_pending  = [long]$cols[4].Trim()
         }
     }
 }
@@ -156,12 +175,10 @@ ORDER BY bytes_retained DESC;
 function Drop-Slot {
     param([hashtable]$Instance, [string]$SlotName)
     $query = "SELECT pg_drop_replication_slot('$SlotName');"
-    try {
-        Invoke-Sqlcmd -Query $query `
-            -ConnectionString "Server=localhost;Port=$($Instance.Port);Database=postgres;Integrated Security=true;" `
-            -ErrorAction Stop | Out-Null
-    } catch {
-        & psql -h localhost -p $Instance.Port -U postgres -c $query | Out-Null
+    $result = & $global:psqlExe -h 127.0.0.1 -p $Instance.Port -U postgres -c $query 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $errMsg = $result -join ' '
+        Write-Log "[$($Instance.Name)] Failed to drop slot '$SlotName': $errMsg" "ERROR"
     }
 }
 
@@ -171,7 +188,8 @@ function Check-WalDir {
     $sizeBytes = (Get-ChildItem $Instance.WalDir -File | Measure-Object Length -Sum).Sum
     if ($sizeBytes -ge $WalDirAlertBytes) {
         $sizeMB = [math]::Round($sizeBytes / 1MB)
-        Write-Log "[$($Instance.Name)] pg_wal directory size ${sizeMB}MB exceeds alert threshold ($([math]::Round($WalDirAlertBytes/1MB))MB)" "WARNING"
+        $limitMB = [math]::Round($WalDirAlertBytes / 1MB)
+        Write-Log "[$($Instance.Name)] pg_wal directory size ${sizeMB}MB exceeds alert threshold (${limitMB}MB)" "WARNING"
     }
 }
 
@@ -189,18 +207,17 @@ foreach ($inst in $instances) {
     foreach ($slot in $slots) {
         $name        = $slot.slot_name
         $retained    = [long]$slot.bytes_retained
-        $inactive    = [double]$slot.minutes_since_active
         $retainedMB  = [math]::Round($retained / 1MB, 1)
 
         if ($retained -ge $WarnThresholdBytes) {
-            Write-Log "[$($inst.Name)] Slot '$name' retaining ${retainedMB}MB (inactive ${inactive:F1} min)" "WARNING"
+            Write-Log "[$($inst.Name)] Slot '$name' retaining ${retainedMB}MB" "WARNING"
         }
 
-        if ($retained -ge $AutoDropThresholdBytes -and $inactive -ge $AutoDropInactiveMinutes) {
+        if ($retained -ge $AutoDropThresholdBytes) {
             if ($AlertOnly) {
-                Write-Log "[$($inst.Name)] AlertOnly=true — would drop slot '$name' (${retainedMB}MB, ${inactive:F1} min inactive)" "WARNING"
+                Write-Log "[$($inst.Name)] AlertOnly=true - would drop slot '$name' (${retainedMB}MB)" "WARNING"
             } else {
-                Write-Log "[$($inst.Name)] Dropping orphaned slot '$name' (${retainedMB}MB, ${inactive:F1} min inactive)" "WARNING"
+                Write-Log "[$($inst.Name)] Dropping orphaned slot '$name' (${retainedMB}MB)" "WARNING"
                 Drop-Slot -Instance $inst -SlotName $name
                 Write-Log "[$($inst.Name)] Slot '$name' dropped successfully"
             }
