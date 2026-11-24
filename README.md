@@ -4,9 +4,9 @@
 
 # pg-incident-recovery
 
-A Windows-first PostgreSQL recovery orchestrator for hosts running multiple PostgreSQL services.
+A Windows PowerShell PostgreSQL recovery orchestrator for hosts running multiple PostgreSQL services.
 
-This is intentionally a **Windows-first** operational tool, not a cross-platform abstraction. The point of the repo is to encode a real recovery workflow for service-based PostgreSQL clusters on Windows hosts where careful state classification matters more than generic portability.
+This is intentionally a Windows PowerShell operational tool, not a cross-platform abstraction. The point of the repo is to encode a real recovery workflow for service-based PostgreSQL clusters on Windows hosts where careful state classification matters more than generic portability.
 
 This tool is designed for the ugly operational case where a server reboots or crashes and several PostgreSQL clusters come back in mixed states: some cleanly stopped, some stuck behind stale `postmaster.pid`, some still replaying WAL, and some permanently blocked because a required WAL file is gone.
 
@@ -115,20 +115,22 @@ Important fields:
 
 ## Usage
 
+Ensure your PowerShell execution policy permits running local scripts (for example, `RemoteSigned` in `CurrentUser` scope), then run from Windows PowerShell 5.1+ (`powershell`) or PowerShell 7+ (`pwsh`):
+
 ```powershell
-pwsh -File .\scripts\pg-incident-recovery.ps1 -ConfigPath .\examples\cluster-config.example.json
+powershell -NoProfile -File .\scripts\pg-incident-recovery.ps1 -ConfigPath .\examples\cluster-config.example.json -DryRun
 ```
 
-Dry run:
+Live execution (after reviewing `-DryRun` output):
 
 ```powershell
-pwsh -File .\scripts\pg-incident-recovery.ps1 -ConfigPath .\examples\cluster-config.example.json -DryRun
+powershell -NoProfile -File .\scripts\pg-incident-recovery.ps1 -ConfigPath .\examples\cluster-config.example.json
 ```
 
 The script expects:
 
 - Windows Server or Windows workstation with PostgreSQL services installed
-- PowerShell 5.1+
+- Windows PowerShell 5.1+ (or PowerShell 7+ with `pwsh`)
 - `pg_controldata.exe` available in one of the configured PostgreSQL bin directories
 - optional: `psql.exe` if you want cluster-map enrichment (`service -> database name`)
 
@@ -166,6 +168,19 @@ The summary is grouped by:
 - skipped services
 
 This is designed for operators first. Machine-readable JSON can come later, but the human summary is the primary interface in v0.1.
+
+---
+
+## Origin & Field Results
+
+This tool originated while supporting on-prem multi-cluster Windows PostgreSQL hosts running ~30 database services per host.
+
+In the original environment:
+
+- wave-based parallel startup with stale `postmaster.pid` cleanup and WAL pre-checks cut full-host post-crash recovery from `~3h` to `<5 min`
+- deploying `pg-wal-slot-monitor.ps1` alongside `max_slot_wal_keep_size` (on PostgreSQL 13+) eliminated recurring WAL disk exhaustion where deployed
+
+These field timings reflect the original production support environment and are not reproduced by the standalone mock tests in this repository.
 
 ---
 
@@ -232,6 +247,8 @@ for the annotated WAL/replication configuration context this monitor was designe
 ```text
 pg-incident-recovery/
   README.md
+  RELEASING.md
+  SECURITY.md
   LICENSE
   .gitignore
   scripts/
@@ -240,7 +257,6 @@ pg-incident-recovery/
   tests/
     test-recovery.ps1
   docs/
-    implementation-plan.md
     linux-parity.md
   examples/
     cluster-config.example.json
@@ -254,10 +270,10 @@ pg-incident-recovery/
 
 ## Testing & Verification
 
-Run the offline unit test suite (Windows PowerShell 5.1 or PowerShell 7+):
+Run the offline unit test suite on Windows PowerShell 5.1 (or `pwsh` on PowerShell 7+), assuming an execution policy that allows local scripts (e.g. `RemoteSigned`):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test-recovery.ps1
+powershell -NoProfile -File .\tests\test-recovery.ps1
 ```
 
 For Linux PostgreSQL hosts sharing the same WAL / replication-slot diagnostics, see [`docs/linux-parity.md`](docs/linux-parity.md).
@@ -271,20 +287,7 @@ For Linux PostgreSQL hosts sharing the same WAL / replication-slot diagnostics, 
 - Low-disk aborts are intentional: starting a cluster on an exhausted volume can worsen the incident.
 - Localized PostgreSQL logs are real. If your host logs in a different language, update the regex patterns in config.
 
-See [`SECURITY.md`](SECURITY.md) for the public security and operational-safety policy.
-
----
-
-## Public Release Checklist
-
-Before tagging a public release, verify:
-
-- The README usage examples match the script parameters in `scripts/pg-incident-recovery.ps1`.
-- `examples/cluster-config.example.json` contains only generic paths, service patterns, and thresholds.
-- A private-string scan finds no client names, credentials, internal server paths, or production database names.
-- The documented safety boundaries still match the implementation: no automatic `pg_resetwal`, WAL deletion, replication-slot remediation, or service-definition rewrite.
-- `-DryRun` remains documented before normal execution examples.
-- Release notes describe the release as a Windows-first operator-guided recovery tool, not a guaranteed automatic repair system.
+See [`SECURITY.md`](SECURITY.md) for the public security and operational-safety policy, and [`RELEASING.md`](RELEASING.md) for release verification steps.
 
 ---
 
