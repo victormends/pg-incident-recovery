@@ -633,122 +633,124 @@ function Invoke-StartPass {
     return @{ Resolved = $passResolved; Failed = $passFailed; Skipped = $skipped; WalCorrupted = $walCorrupted }
 }
 
-$config = Import-Config -Path $ConfigPath
+if ($MyInvocation.InvocationName -ne '.') {
+    $config = Import-Config -Path $ConfigPath
 
-$stateDir = $config.state_dir
-$queueFile = Join-Path $stateDir 'failed-clusters.txt'
-$clusterMapFile = Join-Path $stateDir 'cluster-map.txt'
-$logFile = Join-Path $stateDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
+    $stateDir = $config.state_dir
+    $queueFile = Join-Path $stateDir 'failed-clusters.txt'
+    $clusterMapFile = Join-Path $stateDir 'cluster-map.txt'
+    $logFile = Join-Path $stateDir ('run-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')
 
-Initialize-File -Path $queueFile
-Initialize-File -Path $clusterMapFile
-Initialize-File -Path $logFile
+    Initialize-File -Path $queueFile
+    Initialize-File -Path $clusterMapFile
+    Initialize-File -Path $logFile
 
-$probeUser = if ($config.cluster_map_probe_user) { [string]$config.cluster_map_probe_user } else { 'postgres' }
+    $probeUser = if ($config.cluster_map_probe_user) { [string]$config.cluster_map_probe_user } else { 'postgres' }
 
-if (-not $DryRun) {
-    try {
-        Start-Transcript -Path $logFile -Append | Out-Null
-        Write-Info "Transcript started at $logFile"
-    }
-    catch {
-        Write-Warn "Could not start transcript logging: $($_.Exception.Message)"
-    }
-}
-
-$psqlPath = Get-PostgresToolPath -Candidates $config.pg_bin_candidates -ToolName 'psql.exe'
-$pgControlDataPath = Get-PostgresToolPath -Candidates $config.pg_bin_candidates -ToolName 'pg_controldata.exe'
-
-if (-not $pgControlDataPath) {
-    Write-Warn 'pg_controldata.exe not found. WAL-missing detection will be limited.'
-}
-
-Write-Info 'Waiting 10 seconds for the Service Control Manager to settle...'
-Start-Sleep -Seconds 10
-
-$services = Get-ServiceMatches -Patterns $config.service_name_patterns | Where-Object { $_.Status -eq 'Stopped' }
-if (-not $services) {
-    Write-Ok 'No stopped PostgreSQL services matched the configured patterns.'
-    exit 0
-}
-
-$queueCache = Read-KeyValueFile -Path $queueFile
-foreach ($svc in $services) {
-    if (-not $queueCache.ContainsKey($svc.Name)) {
-        $dataDir = Resolve-DataDirectoryFromService -ServiceName $svc.Name
-        if ($dataDir) {
-            $queueCache[$svc.Name] = $dataDir
+    if (-not $DryRun) {
+        try {
+            Start-Transcript -Path $logFile -Append | Out-Null
+            Write-Info "Transcript started at $logFile"
+        }
+        catch {
+            Write-Warn "Could not start transcript logging: $($_.Exception.Message)"
         }
     }
-}
 
-$firstPass = Invoke-StartPass -ServiceList $services.Name -DataDirMap $queueCache -Config $config -PsqlPath $psqlPath -PgControlDataPath $pgControlDataPath -ClusterMapFile $clusterMapFile -ProbeUser $probeUser -DryRunMode:$DryRun
+    $psqlPath = Get-PostgresToolPath -Candidates $config.pg_bin_candidates -ToolName 'psql.exe'
+    $pgControlDataPath = Get-PostgresToolPath -Candidates $config.pg_bin_candidates -ToolName 'pg_controldata.exe'
 
-$totalResolved = New-Object System.Collections.Generic.List[string]
-$totalFailed = New-Object System.Collections.Generic.List[string]
-$totalSkipped = New-Object System.Collections.Generic.List[string]
-$totalWalCorrupt = New-Object System.Collections.Generic.List[string]
-
-foreach ($n in $firstPass.Resolved)     { $totalResolved.Add($n) }
-foreach ($n in $firstPass.Failed)       { $totalFailed.Add($n) }
-foreach ($n in $firstPass.Skipped)      { $totalSkipped.Add($n) }
-foreach ($n in $firstPass.WalCorrupted) { $totalWalCorrupt.Add($n) }
-
-$retryCount = 0
-while ($totalFailed.Count -gt 0 -and $retryCount -lt [int]$config.recovery.max_retries) {
-    $retryCount++
-    Write-Warn "Retry $retryCount of $($config.recovery.max_retries): $($totalFailed.Count) service(s) still failing."
-    Start-Sleep -Seconds ([int]$config.recovery.retry_delay_seconds)
-
-    $retryList = $totalFailed.ToArray()
-    $totalFailed.Clear()
-
-    $retryPass = Invoke-StartPass -ServiceList $retryList -DataDirMap $queueCache -Config $config -PsqlPath $psqlPath -PgControlDataPath $pgControlDataPath -ClusterMapFile $clusterMapFile -ProbeUser $probeUser -DryRunMode:$DryRun
-
-    foreach ($n in $retryPass.Resolved)     { $totalResolved.Add($n) }
-    foreach ($n in $retryPass.Failed)       { $totalFailed.Add($n) }
-    foreach ($n in $retryPass.Skipped)      { $totalSkipped.Add($n) }
-    foreach ($n in $retryPass.WalCorrupted) { $totalWalCorrupt.Add($n) }
-}
-
-$resolvedArray = $totalResolved.ToArray()
-$finalQueue = @{}
-foreach ($entry in $queueCache.GetEnumerator()) {
-    if (-not ($resolvedArray -icontains $entry.Key)) {
-        $finalQueue[$entry.Key] = $entry.Value
+    if (-not $pgControlDataPath) {
+        Write-Warn 'pg_controldata.exe not found. WAL-missing detection will be limited.'
     }
+
+    Write-Info 'Waiting 10 seconds for the Service Control Manager to settle...'
+    Start-Sleep -Seconds 10
+
+    $services = Get-ServiceMatches -Patterns $config.service_name_patterns | Where-Object { $_.Status -eq 'Stopped' }
+    if (-not $services) {
+        Write-Ok 'No stopped PostgreSQL services matched the configured patterns.'
+        exit 0
+    }
+
+    $queueCache = Read-KeyValueFile -Path $queueFile
+    foreach ($svc in $services) {
+        if (-not $queueCache.ContainsKey($svc.Name)) {
+            $dataDir = Resolve-DataDirectoryFromService -ServiceName $svc.Name
+            if ($dataDir) {
+                $queueCache[$svc.Name] = $dataDir
+            }
+        }
+    }
+
+    $firstPass = Invoke-StartPass -ServiceList $services.Name -DataDirMap $queueCache -Config $config -PsqlPath $psqlPath -PgControlDataPath $pgControlDataPath -ClusterMapFile $clusterMapFile -ProbeUser $probeUser -DryRunMode:$DryRun
+
+    $totalResolved = New-Object System.Collections.Generic.List[string]
+    $totalFailed = New-Object System.Collections.Generic.List[string]
+    $totalSkipped = New-Object System.Collections.Generic.List[string]
+    $totalWalCorrupt = New-Object System.Collections.Generic.List[string]
+
+    foreach ($n in $firstPass.Resolved)     { $totalResolved.Add($n) }
+    foreach ($n in $firstPass.Failed)       { $totalFailed.Add($n) }
+    foreach ($n in $firstPass.Skipped)      { $totalSkipped.Add($n) }
+    foreach ($n in $firstPass.WalCorrupted) { $totalWalCorrupt.Add($n) }
+
+    $retryCount = 0
+    while ($totalFailed.Count -gt 0 -and $retryCount -lt [int]$config.recovery.max_retries) {
+        $retryCount++
+        Write-Warn "Retry $retryCount of $($config.recovery.max_retries): $($totalFailed.Count) service(s) still failing."
+        Start-Sleep -Seconds ([int]$config.recovery.retry_delay_seconds)
+
+        $retryList = $totalFailed.ToArray()
+        $totalFailed.Clear()
+
+        $retryPass = Invoke-StartPass -ServiceList $retryList -DataDirMap $queueCache -Config $config -PsqlPath $psqlPath -PgControlDataPath $pgControlDataPath -ClusterMapFile $clusterMapFile -ProbeUser $probeUser -DryRunMode:$DryRun
+
+        foreach ($n in $retryPass.Resolved)     { $totalResolved.Add($n) }
+        foreach ($n in $retryPass.Failed)       { $totalFailed.Add($n) }
+        foreach ($n in $retryPass.Skipped)      { $totalSkipped.Add($n) }
+        foreach ($n in $retryPass.WalCorrupted) { $totalWalCorrupt.Add($n) }
+    }
+
+    $resolvedArray = $totalResolved.ToArray()
+    $finalQueue = @{}
+    foreach ($entry in $queueCache.GetEnumerator()) {
+        if (-not ($resolvedArray -icontains $entry.Key)) {
+            $finalQueue[$entry.Key] = $entry.Value
+        }
+    }
+
+    if (-not $DryRun) {
+        Write-KeyValueFile -Path $queueFile -Map $finalQueue
+    }
+
+    $clusterMap = Read-KeyValueFile -Path $clusterMapFile
+
+    Write-Host "`n============================================================" -ForegroundColor Cyan
+    Write-Host "Recovered automatically : $($totalResolved.Count)" -ForegroundColor Green
+    foreach ($n in $totalResolved) {
+        $db = if ($clusterMap.ContainsKey($n)) { $clusterMap[$n] } else { '?' }
+        Write-Host "  + $n ($db)" -ForegroundColor Green
+    }
+
+    Write-Host "Still failing          : $($totalFailed.Count)" -ForegroundColor $(if ($totalFailed.Count -gt 0) { 'Red' } else { 'Green' })
+    foreach ($n in $totalFailed) {
+        $db = if ($clusterMap.ContainsKey($n)) { $clusterMap[$n] } else { '?' }
+        Write-Host "  - $n ($db)" -ForegroundColor Red
+    }
+
+    Write-Host "WAL missing / fatal    : $($totalWalCorrupt.Count)" -ForegroundColor $(if ($totalWalCorrupt.Count -gt 0) { 'Red' } else { 'Green' })
+    foreach ($n in $totalWalCorrupt) {
+        $db = if ($clusterMap.ContainsKey($n)) { $clusterMap[$n] } else { '?' }
+        Write-Host "  ! $n ($db) - restore from backup required" -ForegroundColor Red
+    }
+
+    Write-Host "Skipped                : $($totalSkipped.Count)" -ForegroundColor $(if ($totalSkipped.Count -gt 0) { 'Yellow' } else { 'Green' })
+    foreach ($n in $totalSkipped) {
+        Write-Host "  ~ $n" -ForegroundColor Yellow
+    }
+
+    Write-Host "Queue file             : $queueFile" -ForegroundColor DarkGray
+    Write-Host "Cluster map            : $clusterMapFile" -ForegroundColor DarkGray
+    Write-Host "============================================================" -ForegroundColor Cyan
 }
-
-if (-not $DryRun) {
-    Write-KeyValueFile -Path $queueFile -Map $finalQueue
-}
-
-$clusterMap = Read-KeyValueFile -Path $clusterMapFile
-
-Write-Host "`n============================================================" -ForegroundColor Cyan
-Write-Host "Recovered automatically : $($totalResolved.Count)" -ForegroundColor Green
-foreach ($n in $totalResolved) {
-    $db = if ($clusterMap.ContainsKey($n)) { $clusterMap[$n] } else { '?' }
-    Write-Host "  + $n ($db)" -ForegroundColor Green
-}
-
-Write-Host "Still failing          : $($totalFailed.Count)" -ForegroundColor $(if ($totalFailed.Count -gt 0) { 'Red' } else { 'Green' })
-foreach ($n in $totalFailed) {
-    $db = if ($clusterMap.ContainsKey($n)) { $clusterMap[$n] } else { '?' }
-    Write-Host "  - $n ($db)" -ForegroundColor Red
-}
-
-Write-Host "WAL missing / fatal    : $($totalWalCorrupt.Count)" -ForegroundColor $(if ($totalWalCorrupt.Count -gt 0) { 'Red' } else { 'Green' })
-foreach ($n in $totalWalCorrupt) {
-    $db = if ($clusterMap.ContainsKey($n)) { $clusterMap[$n] } else { '?' }
-    Write-Host "  ! $n ($db) - restore from backup required" -ForegroundColor Red
-}
-
-Write-Host "Skipped                : $($totalSkipped.Count)" -ForegroundColor $(if ($totalSkipped.Count -gt 0) { 'Yellow' } else { 'Green' })
-foreach ($n in $totalSkipped) {
-    Write-Host "  ~ $n" -ForegroundColor Yellow
-}
-
-Write-Host "Queue file             : $queueFile" -ForegroundColor DarkGray
-Write-Host "Cluster map            : $clusterMapFile" -ForegroundColor DarkGray
-Write-Host "============================================================" -ForegroundColor Cyan

@@ -237,8 +237,11 @@ pg-incident-recovery/
   scripts/
     pg-incident-recovery.ps1
     pg-wal-slot-monitor.ps1
+  tests/
+    test-recovery.ps1
   docs/
     implementation-plan.md
+    linux-parity.md
   examples/
     cluster-config.example.json
     failed-clusters.example.txt
@@ -246,6 +249,18 @@ pg-incident-recovery/
     sample-summary.txt
     wal-replication-config.example.conf
 ```
+
+---
+
+## Testing & Verification
+
+Run the offline unit test suite (Windows PowerShell 5.1 or PowerShell 7+):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\test-recovery.ps1
+```
+
+For Linux PostgreSQL hosts sharing the same WAL / replication-slot diagnostics, see [`docs/linux-parity.md`](docs/linux-parity.md).
 
 ---
 
